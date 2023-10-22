@@ -72,7 +72,7 @@ declare SYS_ROOT_CRT_FILE
 SYS_ROOT_CRT_FILE="/etc/ssl/certs/ROOT-CA.${ROOT_DOMAIN}.crt"
 
 declare SYS_INTERMED_CRT_FILE
-SYS_INTERMED_CRT_FILE="/etc/ssl/certs/ROOT-CA.${ROOT_DOMAIN}.crt"
+SYS_INTERMED_CRT_FILE="/etc/ssl/certs/INTERMED-CA.${ROOT_DOMAIN}.crt"
 
 if [[ -f "${SYS_ROOT_CRT_FILE}" || -f "${SYS_INTERMED_CRT_FILE}" ]]; then
   echo "Already have certificates installed at ${SYS_ROOT_CRT_FILE} or ${SYS_INTERMED_CRT_FILE}."
@@ -408,6 +408,22 @@ while true; do
   fi
 done
 
+function generate_random_password() {
+  # Usage: generate_random_password <password_length>
+
+  # Generate a random password of the specified length using a cryptographically
+  # secure random number generator (CSPRNG).
+
+  local password_length="${1:-16}"
+  local password=""
+
+  while [[ "${#password}" -lt "${password_length}" ]]; do
+    local random_byte=$(openssl rand -base64 1)
+    password+="${random_byte}"
+  done
+
+  echo "${password}"
+}
 
 declare ROOT_ALGO_CURVE
 declare ROOT_ALGO_CURVE_LOWER
@@ -442,7 +458,18 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
     fi
   done
 
-  openssl ecparam -out "${ROOT_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey
+  while true; do
+    read -r -p "Encrypt the root private key? [y|n]: " ENCRYPT_INTERMED_KEY
+    echo ""
+    echo "   HERE IS A RANDOM PASSWORD FOR YOU (use it if you want but write it down first): "
+    echo ""
+    echo "           $(generate_random_password 33)"
+    echo ""
+    case "${ENCRYPT_INTERMED_KEY}" in
+      Yy) openssl ecparam -out "${ROOT_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey;;
+      *) { openssl ecparam -genkey -name "${ROOT_ALGO_CURVE}" | openssl ec -aes256 -out "${ROOT_KEY_FILE}" } ;;
+    esac
+  done
   openssl req -new -sha512 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}"
 else
   openssl genrsa -out "${ROOT_KEY_FILE}" 4096
@@ -509,9 +536,21 @@ openssl rand -hex 16 > "${INTERMED_SERIAL_FILE}"
 
 export OPENSSL_CONF="${INTERMED_CNF_FILE}"
 
+declare ENCRYPT_INTERMED_KEY
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
-  openssl ecparam -out "${INTERMED_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey
-  openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
+  while true; do
+    read -r -p "Encrypt the intermediate private key? [y|n]: " ENCRYPT_INTERMED_KEY
+    echo ""
+    echo "   HERE IS A RANDOM PASSWORD FOR YOU (use it if you want but write it down first): "
+    echo ""
+    echo "           $(generate_random_password 33)"
+    echo ""
+    case "${ENCRYPT_INTERMED_KEY}" in
+      Yy) openssl ecparam -out "${INTERMED_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey;;
+      *) { openssl ecparam -genkey -name "${ROOT_ALGO_CURVE}" | openssl ec -aes256 -out "${INTERMED_KEY_FILE}" } ;;
+    esac
+  done
+  openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
 else
   openssl genrsa -out "${INTERMED_KEY_FILE}" 4096
   openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
@@ -533,7 +572,7 @@ openssl x509 -in "${INTERMED_CRT_FILE}" \
              -text \
              -certopt no_version,no_pubkey,no_sigdump \
              -nameopt multiline
-
+  
 openssl verify -verbose \
                -CAfile "${INTERMED_CRT_FILE}" "${INTERMED_CRT_FILE}"
 
