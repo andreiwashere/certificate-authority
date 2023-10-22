@@ -34,12 +34,18 @@ if [ -n "$(ls -A "${BASE_DIR}")" ]; then
   exit 1
 fi
 
-mkdir -p "${BASE_DIR}/{root-ca,intermed-ca,tmp,certificates}"
+mkdir -p "${BASE_DIR}/{root-ca,intermed-ca,tmp,certificates,passwd}"
 echo "Created directories: "
 echo "1. ${BASE_DIR}/root-ca"
 echo "2. ${BASE_DIR}/intermed-ca"
 echo "3. ${BASE_DIR}/tmp"
 echo "4. ${BASE_DIR}/certificates"
+echo "5. ${BASE_DIR}/passwd"
+
+declare FILE_ROOT_PASSWD
+declare FILE_INTERMED_PASSWD
+FILE_ROOT_PASSWD="${BASE_DIR}/passwd/.root-ca.${ROOT_DOMAIN}.passwd"
+FILE_INTERMED_PASSWD="${BASE_DIR}/passwd/.intermed-ca.${ROOT_DOMAIN}.passwd"
 
 declare ROOT_DIR
 ROOT_DIR="${BASE_DIR}/root-ca"
@@ -411,26 +417,36 @@ done
 function generate_random_password() {
   # Usage: generate_random_password <password_length>
 
-  # Generate a random password of the specified length using a cryptographically
-  # secure random number generator (CSPRNG).
-
   local password_length="${1:-16}"
-  local password=""
 
-  while [[ "${#password}" -lt "${password_length}" ]]; do
-    local random_byte=$(openssl rand -base64 1)
-    password+="${random_byte}"
-  done
+  # Generate random bytes and encode them in base64. Then remove any non-alphanumeric characters.
+  local password=$(openssl rand -base64 $((password_length * 3 / 4 + 1)) | tr -dc 'a-zA-Z0-9' | head -c $password_length)
 
   echo "${password}"
 }
 
+
 declare ROOT_ALGO_CURVE
 declare ROOT_ALGO_CURVE_LOWER
+
+declare ROOT_BIT_LENGTH
+declare ROOT_BIT_LENGTH_LOWER
+
+
+declare SUGGEST_ROOT_PASSWD
+SUGGEST_ROOT_PASSWD="$(generate_random_password 72)"
+echo "${SUGGEST_ROOT_PASSWD}" | tee -a "${FILE_ROOT_PASSWD}" > /dev/null
+chmod 0400 "${FILE_ROOT_PASSWD}"
+
+declare SUGGEST_INTERMED_PASSWD
+SUGGEST_INTERMED_PASSWD="$(generate_random_password 72)"
+echo "${SUGGEST_INTERMED_PASSWD}" | tee -a "${FILE_INTERMED_PASSWD}" > /dev/null
+chmod 0400 "${FILE_INTERMED_PASSWD}"
+
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
 
   while true; do
-    echo "Which curve shall be used for ${ROOT_DOMAIN} Root Certificate Authority? "
+    echo "Which Elliptic Curve (EC) shall be used for ${ROOT_DOMAIN} Root Certificate Authority? "
     echo
     echo "Choice  Curve           Field Size  Security   Performance"
     echo "------  -----           ----------  --------   -----------"
@@ -458,22 +474,57 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
     fi
   done
 
-  while true; do
-    read -r -p "Encrypt the root private key? [y|n]: " ENCRYPT_INTERMED_KEY
-    echo ""
-    echo "   HERE IS A RANDOM PASSWORD FOR YOU (use it if you want but write it down first): "
-    echo ""
-    echo "           $(generate_random_password 33)"
-    echo ""
-    case "${ENCRYPT_INTERMED_KEY}" in
-      Yy) openssl ecparam -out "${ROOT_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey;;
-      *) { openssl ecparam -genkey -name "${ROOT_ALGO_CURVE}" | openssl ec -aes256 -out "${ROOT_KEY_FILE}" } ;;
-    esac
-  done
+  echo "${ROOT_ALGO_CURVE}" | tee -a "${BASE_DIR}/passwd/.root-ca.ecc-curve" > /dev/null
+
+  case "${ROOT_ALGO_CURVE}" in
+    prime256v1) 
+      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:prime256v1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      ;;
+    secp384r1) 
+      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      ;;
+    brainpoolP512r1) 
+      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:brainpoolP512r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      ;;
+    nistp521) 
+      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp521r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      ;;
+    *) # ed25519 or edwards25519 
+      openssl genpkey -algorithm ED25519 -out "${ROOT_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      ;;
+  esac
+
   openssl req -new -sha512 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}"
 else
-  openssl genrsa -out "${ROOT_KEY_FILE}" 4096
-  openssl req -new -sha256 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}"
+  while true; do
+    echo "Which RSA bit length shall be used for ${ROOT_DOMAIN} Root Certificate Authority? "
+    echo ""
+    echo "Choice  Bits  Performance  Security"
+    echo "------  ----  -----------  --------"
+    echo "1       2048  Excellent    Fast"
+    echo "2       3072  Excellent    Good"
+    echo "3       4096  Very good    Good"
+    echo "4       8192  Good         Slow"
+    echo ""
+    read -r -p "Which bit length shall be used? [1-4]: " ROOT_BIT_LENGTH
+    echo
+    ROOT_BIT_LENGTH_LOWER=$(echo "${ROOT_BIT_LENGTH}" | tr '[:upper:]' '[:lower:]')
+    if [[ "${ROOT_ALGO_CURVE_LOWER}" =~ ^(2048|3072|4096|8192|1|2|3|4)$ ]]; then
+      case "${ROOT_ALGO_CURVE_LOWER}" in
+        1) ROOT_BIT_LENGTH="2048";;
+        2) ROOT_BIT_LENGTH="3072";;
+        3) ROOT_BIT_LENGTH="4096";;
+        4) ROOT_BIT_LENGTH="8192";;
+        *) ROOT_BIT_LENGTH="${ROOT_BIT_LENGTH_LOWER}";;
+      esac
+      break
+    else
+      echo "Invalid bit length selected. Please try again."
+    fi
+  done
+
+  openssl genrsa -aes256 -out "${ROOT_KEY_FILE}" -passout "file:${FILE_ROOT_PASSWD}" "${ROOT_BIT_LENGTH}"
+  openssl req -new -sha256 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -passin "file:${FILE_ROOT_PASSWD}" -out "${ROOT_CSR_FILE}"
 fi
 
 chmod 0400 "${ROOT_KEY_FILE}"
@@ -485,7 +536,8 @@ openssl ca -selfsign \
            -out "${ROOT_CRT_FILE}" \
            -extensions "root-ca_ext" \
            -startdate `date +%y%m%d000000Z -u -d -1day` \
-           -enddate `date +%y%m%d000000Z -u -d +9years+99days`
+           -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
+           -passin "file:${FILE_ROOT_PASSWD}"
 
 openssl x509 -in "${ROOT_CRT_FILE}" \
              -noout \
@@ -497,7 +549,8 @@ openssl verify -verbose \
                -CAfile "${ROOT_CRT_FILE}" "${ROOT_CRT_FILE}"
 
 openssl ca -gencrl \
-           -out "${ROOT_CRL_FILE}"
+           -out "${ROOT_CRL_FILE}" \
+           -passin "file:${FILE_ROOT_PASSWD}"
 
 declare INSTALL_ROOT_CERT
 if [[ $(sudo -v cp) || test -w "/etc/ssl/certs" ]]; then
@@ -536,49 +589,68 @@ openssl rand -hex 16 > "${INTERMED_SERIAL_FILE}"
 
 export OPENSSL_CONF="${INTERMED_CNF_FILE}"
 
-declare ENCRYPT_INTERMED_KEY
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
-  while true; do
-    read -r -p "Encrypt the intermediate private key? [y|n]: " ENCRYPT_INTERMED_KEY
-    echo ""
-    echo "   HERE IS A RANDOM PASSWORD FOR YOU (use it if you want but write it down first): "
-    echo ""
-    echo "           $(generate_random_password 33)"
-    echo ""
-    case "${ENCRYPT_INTERMED_KEY}" in
-      Yy) openssl ecparam -out "${INTERMED_KEY_FILE}" -name "${ROOT_ALGO_CURVE}" -genkey;;
-      *) { openssl ecparam -genkey -name "${ROOT_ALGO_CURVE}" | openssl ec -aes256 -out "${INTERMED_KEY_FILE}" } ;;
-    esac
-  done
-  openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
+  case "${ROOT_ALGO_CURVE}" in
+    prime256v1) 
+      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:prime256v1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      ;;
+    secp384r1) 
+      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      ;;
+    brainpoolP512r1) 
+      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:brainpoolP512r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      ;;
+    nistp521) 
+      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp521r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      ;;
+    *) # ed25519 or edwards25519 
+      openssl genpkey -algorithm ED25519 -out "${INTERMED_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      ;;
+  esac
+
+  openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
 else
-  openssl genrsa -out "${INTERMED_KEY_FILE}" 4096
-  openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
+  openssl genrsa -aes256 -out "${INTERMED_KEY_FILE}" -passout "file:${FILE_INTERMED_PASSWD}" "${ROOT_BIT_LENGTH}"
+  openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -passin "file:${FILE_INTERMED_PASSWD}" -out "${INTERMED_CSR_FILE}"
 fi
 
 chmod 0400 "${INTERMED_KEY_FILE}"
 
-openssl rand -hex 16 > "${INTERMED_SERIAL_FILE}"
 
-openssl ca -selfsign \
-           -in "${INTERMED_CSR_FILE}" \
-           -out "${INTERMED_CRT_FILE}" \
+cp "${INTERMED_CSR_FILE}" "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")"
+
+unset OPENSSL_CONF
+
+export OPENSSL_CONF="${ROOT_CNF_FILE}"
+
+openssl rand -hex 16 > ${ROOT_SERIAL_FILE}
+
+openssl ca -in "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")" \
+           -out "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
            -extensions "intermed-ca_ext" \
            -startdate `date +%y%m%d000000Z -u -d -1day` \
-           -enddate `date +%y%m%d000000Z -u -d +9years+99days`
+           -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
+           -passin "file:${FILE_ROOT_PASSWD}"
 
-openssl x509 -in "${INTERMED_CRT_FILE}" \
+openssl x509 -in "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
              -noout \
              -text \
              -certopt no_version,no_pubkey,no_sigdump \
              -nameopt multiline
-  
-openssl verify -verbose \
-               -CAfile "${INTERMED_CRT_FILE}" "${INTERMED_CRT_FILE}"
 
+openssl verify -verbose \
+               -CAfile "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem"
+
+
+cp "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
+
+openssl verify -verbose \
+               -CAfile "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
 
 openssl ca -gencrl \
-           -out "${INTERMED_CRL_FILE}"
+           -out "${INTERMED_CRL_FILE}" \
+           -passin "file:${FILE_INTERMED_PASSWD}"
+
 
 declare INSTALL_INTERMED_CERT
 if [[ $(sudo -v cp) || test -w "/etc/ssl/certs" ]]; then
