@@ -118,3 +118,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 By using this script, you agree to the terms above, and you fully absolve the developer of any liability or claims that may arise from your use or misuse. Use at your own risk.
 
+## Regulatory and Compliance Knowledge
+
+Depending on the environment where this script is used, there might be regulatory requirements governing the use of cryptographic materials. This is especially true in sectors like finance, healthcare, and critical infrastructure.
