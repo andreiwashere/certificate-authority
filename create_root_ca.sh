@@ -392,13 +392,13 @@ unset CA_HOME
 
 export CA_HOME="${INTERMED_DIR}"
 
-echo "CA_HOME                 = ${INTERMED_DIR}" >> "${INTERMED_CNF_FILE}"
-echo 'oid_section             = new_oids' >> "${INTERMED_CNF_FILE}"
-echo '' >> "${INTERMED_CNF_FILE}"
-echo '[ new_oids ]' >> "${INTERMED_CNF_FILE}"
+#echo "CA_HOME                 = ${INTERMED_DIR}" >> "${INTERMED_CNF_FILE}"
+#echo 'oid_section             = new_oids' >> "${INTERMED_CNF_FILE}"
+#echo '' >> "${INTERMED_CNF_FILE}"
+#echo '[ new_oids ]' >> "${INTERMED_CNF_FILE}"
 #echo 'xmppAddr                = 1.3.6.1.5.5.7.8.5' >> "${INTERMED_CNF_FILE}"
-echo 'dnsSRV                  = 1.3.6.1.5.5.7.8.7' >> "${INTERMED_CNF_FILE}"
-echo '' >> "${INTERMED_CNF_FILE}"
+#echo 'dnsSRV                  = 1.3.6.1.5.5.7.8.7' >> "${INTERMED_CNF_FILE}"
+#echo '' >> "${INTERMED_CNF_FILE}"
 echo '[ ca ]' >> "${INTERMED_CNF_FILE}"
 echo 'default_ca              = intermed_ca' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
@@ -669,7 +669,7 @@ openssl ca -selfsign \
            -out "${ROOT_CRT_FILE}" \
            -extensions "root-ca_ext" \
            -startdate `date +%y%m%d000000Z -u -d -1day` \
-           -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
+           -enddate `date +%y%m%d000000Z -u -d +17years+17days` \
            -passin "file:${FILE_ROOT_PASSWD}"
 
 echo "Here's the new Root CA header..."
@@ -723,11 +723,12 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
   esac
   echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
 
-  openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
+  openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"  -passin "file:${FILE_INTERMED_PASSWD}"
   echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 else
   openssl genrsa -aes256 -out "${INTERMED_KEY_FILE}" -passout "file:${FILE_INTERMED_PASSWD}" "${ROOT_BIT_LENGTH}"
   echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
+
   openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -passin "file:${FILE_INTERMED_PASSWD}" -out "${INTERMED_CSR_FILE}"
   echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 fi
@@ -740,16 +741,17 @@ echo "Copied $(basename "${INTERMED_CSR_FILE}") into ${ROOT_DIR}/certreqs"
 
 unset OPENSSL_CONF
 
-export OPENSSL_CONF="${ROOT_CNF_FILE}"
 
-cd "${INTERMED_DIR}"
+cd "${ROOT_DIR}"
+
+export OPENSSL_CONF="${ROOT_CNF_FILE}"
 
 echo "Signing the intermediate certificate with the Root CA..."
 openssl ca -in "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")" \
            -out "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
            -extensions "intermed-ca_ext" \
            -startdate `date +%y%m%d000000Z -u -d -1day` \
-           -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
+           -enddate `date +%y%m%d000000Z -u -d +17years+17days` \
            -passin "file:${FILE_ROOT_PASSWD}"
 
 echo "Verifying the intermediate certificate..."
@@ -760,13 +762,16 @@ openssl x509 -in "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
              -nameopt multiline
 
 cp "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
-echo "Copied ${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem into ${INTERMED_CRT_FILE}"
+echo "Duplicated Intermediate Certificate to ${INTERMED_CRT_FILE}"
 
 cp "${INTERMED_CRT_FILE}" "${BASE_DIR}/certificates/Intermediate_Certificate_Authority.${ROOT_DOMAIN}.crt"
 echo "Copied $(basename "${INTERMED_CRT_FILE}") into ${BASE_DIR}/certificates"
 
+cat "${INTERMED_CRT_FILE}" "${ROOT_CRT_FILE}" > "${BASE_DIR}/certificates/${ROOT_DOMAIN}.ca-bundle.crt"
+
 openssl verify -verbose \
-               -CAfile "${ROOT_CRT_FILE}" "${INTERMED_CRT_FILE}"
+               -CAfile "${ROOT_CRT_FILE}" \
+               "${BASE_DIR}/certificates/${ROOT_DOMAIN}.ca-bundle.crt"
 echo "Verifed the intermediate certificate against the root certificate"
 
 openssl ca -gencrl \
