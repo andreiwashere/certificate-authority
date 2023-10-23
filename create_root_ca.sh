@@ -5,43 +5,91 @@ set -e  # BEST PRACTICES: Exit immediately if a command exits with a non-zero st
 set -u  # SECURITY: Exit if an unset variable is used to prevent potential security risks.
 set -C  # SECURITY: Prevent existing files from being overwritten using the '>' operator.
 
+# Where the CA will live
 declare BASE_DIR
-read -r -p 'Where do you want to save the Root CA? (eg /opt/ca): ' BASE_DIR
-echo
-
-declare CA_NAME
-read -r -p "Root Certificate Authority Name: " CA_NAME
-echo 
-
-declare CA_LOCALITY
-read -r -p "City where ${CA_NAME} is located (eg. Concord): " CA_LOCALITY
-echo
-
-declare CA_STATE
-read -r -p "State Code (eg NH) where ${CA_NAME} is located: " CA_STATE
-echo
-
-declare ROOT_DOMAIN
-read -r -p "Root Domain Name (eg. domain.com): " ROOT_DOMAIN
+read -r -p 'Where do you want to save the Root CA? (default: /opt/ca): ' BASE_DIR
 echo
 
 if [ "${BASE_DIR}" == "" ]; then
   BASE_DIR="/opt/ca"
 fi
 
+mkdir -p "${BASE_DIR}"
+
 if [ -n "$(ls -A "${BASE_DIR}")" ]; then
   echo "Already have data inside ${BASE_DIR}."
   exit 1
 fi
 
-mkdir -p "${BASE_DIR}/{root-ca,intermed-ca,tmp,certificates,passwd}"
+# CA Corporate Name
+declare CA_NAME
+while true; do
+  read -r -p "Root Certificate Authority Name: " CA_NAME
+  echo 
+  if [[ "${CA_NAME}"  != "" ]]; then
+    break
+  else
+    echo "Invalid entry. Please enter the name of the Root Certificate Authority."
+    echo
+  fi
+done
+
+# CA's operating/legal city
+declare CA_LOCALITY
+while true; do
+  read -r -p "City where ${CA_NAME} is located (eg. Concord): " CA_LOCALITY
+  echo
+  if [[ "${CA_LOCALITY}" != "" ]]; then
+    break;
+  else
+    echo "Invalid entry. Please enter the full City name of ${CA_NAME}."
+    echo 
+  fi
+done
+
+# CA's operating/legal state code (2 chars max)
+declare CA_STATE
+while true; do
+  read -r -p "State Code (eg NH) where ${CA_NAME} is located: " CA_STATE
+  echo
+  if [[ $CA_STATE =~ ^[A-Z]{2}$ ]]; then
+    break
+  else
+    echo "Invalid state code. Please enter exactly two uppercase letters."
+    echo 
+  fi
+done
+
+# CA's primary domain name
+declare ROOT_DOMAIN
+while true; do
+  read -r -p "Root Domain Name (eg. domain.com): " ROOT_DOMAIN
+  echo
+  if [[ $ROOT_DOMAIN =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+    break
+  else
+    echo "Invalid domain format. Please enter a valid domain."
+    echo
+  fi
+done
+
 echo "Created directories: "
+mkdir -p "${BASE_DIR}/root-ca"
 echo "1. ${BASE_DIR}/root-ca"
+
+mkdir -p "${BASE_DIR}/intermed-ca"
 echo "2. ${BASE_DIR}/intermed-ca"
+
+mkdir -p "${BASE_DIR}/tmp"
 echo "3. ${BASE_DIR}/tmp"
+
+mkdir -p "${BASE_DIR}/certificates"
 echo "4. ${BASE_DIR}/certificates"
+
+mkdir -p "${BASE_DIR}/passwd"
 echo "5. ${BASE_DIR}/passwd"
 
+echo "Defining the script's environment..."
 declare FILE_ROOT_PASSWD
 declare FILE_INTERMED_PASSWD
 FILE_ROOT_PASSWD="${BASE_DIR}/passwd/.root-ca.${ROOT_DOMAIN}.passwd"
@@ -97,24 +145,38 @@ if [[ -f "${SYS_ROOT_CRT_FILE}" || -f "${SYS_INTERMED_CRT_FILE}" ]]; then
   exit 1
 fi
 
+echo "Completed defining the Root Certificate's dependencies."
+
 cd "${ROOT_DIR}"
+echo "Creating the ${ROOT_DIR}/{certreqs,certs,crl,newcerts,private} directories..."
 mkdir -p {certreqs,certs,crl,newcerts,private}
+echo "Securing the private key directory..."
 chmod 0700 private
+echo
 
 declare -a domains=()
+echo "List of Permitted Domains for Root CA: ${domains[*]}"
+echo
+echo "You need to manually add ${ROOT_DOMAIN}."
+echo 
 declare permitted_domain
 declare choice
 while true; do
   read -r -p "Add DNS Entry: " permitted_domain
+  if [[ "${permitted_domain}" == "" ]]; then 
+    echo "Invalid entry! Rejected '${permitted_domain}'."
+    continue
+  fi
   domains+=("${permitted_domain}")
   echo "Pending Entries: ${domains[*]}"
-  read -r -p "Add another? [y|n]: " choice
+  read -r -p "Add another? [y*|n]: " choice
   if [[ "$choice" =~ ^[Nn] ]]; then
     break
   fi 
 done
 
 echo "DNS entries for [name_constraints]: ${domains[*]}"
+echo
 declare looks_good
 read -r -p "Does this look good? [y|n]: " looks_good
 if [[ "$looks_good" =~ ^[Nn] ]]; then
@@ -122,129 +184,162 @@ if [[ "$looks_good" =~ ^[Nn] ]]; then
   exit 1
 fi
 
+echo "The Root CA's data directory: ${ROOT_DIR}"
+tree -L 5 "${ROOT_DIR}"
+
+echo
+echo "Summary of variables:"
+echo "1. CA_NAME = ${CA_NAME}"
+echo "2. CA_LOCALITY = ${CA_LOCALITY}"
+echo "3. CA_STATE = ${CA_STATE}"
+echo "4. ROOT_CNF_FILE = ${ROOT_CNF_FILE}"
+echo "5. ROOT_DOMAIN = ${ROOT_DOMAIN}"
+echo "6. ROOT_CNF_FILE = ${ROOT_CNF_FILE}"
+echo "7. ROOT_DOMAIN = ${ROOT_DOMAIN}"
+echo "8. domains = ${domains[*]}"
+
 echo "Creating the ${ROOT_CNF_FILE} file..."
 
-echo 'CA_HOME                     = .' >> "${ROOT_CNF_FILE}"
-echo 'RANDFILE                    = $ENV::CA_HOME/private/.rnd' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ ca ]' >> "${ROOT_CNF_FILE}"
-echo 'default_ca                  = root_ca' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ root_ca ]' >> "${ROOT_CNF_FILE}"
-echo 'dir                         = $ENV::CA_HOME' >> "${ROOT_CNF_FILE}"
-echo 'certs                       = $dir/certs' >> "${ROOT_CNF_FILE}"
-echo "serial                      = \$dir/${ROOT_DOMAIN}.root-ca.serial" >> "${ROOT_CNF_FILE}"
-echo "database                    = \$dir/${ROOT_DOMAIN}.root-ca.index" >> "${ROOT_CNF_FILE}"
-echo 'new_certs_dir               = $dir/newcerts' >> "${ROOT_CNF_FILE}"
-echo "certificate                 = \$dir/${ROOT_DOMAIN}.root-ca.cert.pem" >> "${ROOT_CNF_FILE}"
-echo "private_key                 = \$dir/private/${ROOT_DOMAIN}.root-ca.key.pem" >> "${ROOT_CNF_FILE}"
-echo 'default_days                = 3333' >> "${ROOT_CNF_FILE}"
-echo "crl                         = \$dir/crl/${ROOT_DOMAIN}.root-ca.crl" >> "${ROOT_CNF_FILE}"
-echo 'crl_dir                     = $dir/crl' >> "${ROOT_CNF_FILE}"
-echo "crlnumber                   = \$dir/crl/${ROOT_DOMAIN}.root-ca.crlnum" >> "${ROOT_CNF_FILE}"
-echo 'name_opt                    = multiline, align' >> "${ROOT_CNF_FILE}"
-echo 'cert_opt                    = no_pubkey' >> "${ROOT_CNF_FILE}"
-echo 'copy_extensions             = copy' >> "${ROOT_CNF_FILE}"
-echo 'crl_extensions              = crl_ext' >> "${ROOT_CNF_FILE}"
-echo 'default_crl_days            = 180' >> "${ROOT_CNF_FILE}"
-echo 'default_md                  = sha256' >> "${ROOT_CNF_FILE}"
-echo 'preserve                    = no' >> "${ROOT_CNF_FILE}"
-echo 'email_in_dn                 = no' >> "${ROOT_CNF_FILE}"
-echo 'policy                      = policy' >> "${ROOT_CNF_FILE}"
-echo 'unique_subject              = no' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[policy]' >> "${ROOT_CNF_FILE}"
-echo 'countryName                 = optional' >> "${ROOT_CNF_FILE}"
-echo 'stateOrProvinceName         = optional' >> "${ROOT_CNF_FILE}"
-echo 'localityName                = optional' >> "${ROOT_CNF_FILE}"
-echo 'organizationName            = supplied' >> "${ROOT_CNF_FILE}"
-echo 'organizationalUnitName      = optional' >> "${ROOT_CNF_FILE}"
-echo 'commonName                  = supplied' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ req ]' >> "${ROOT_CNF_FILE}"
-echo 'default_bits                = 4096' >> "${ROOT_CNF_FILE}"
-echo "default_keyfile             = private/${ROOT_DOMAIN}.root-ca.key.pem" >> "${ROOT_CNF_FILE}"
-echo 'encrypt_key                 = yes' >> "${ROOT_CNF_FILE}"
-echo 'default_md                  = sha256' >> "${ROOT_CNF_FILE}"
-echo 'string_mask                 = utf8only' >> "${ROOT_CNF_FILE}"
-echo 'utf8                        = yes' >> "${ROOT_CNF_FILE}"
-echo 'prompt                      = no' >> "${ROOT_CNF_FILE}"
-echo 'req_extensions              = root-ca_req_ext' >> "${ROOT_CNF_FILE}"
-echo 'distinguished_name          = distinguished_name' >> "${ROOT_CNF_FILE}"
-echo 'subjectAltName              = @subject_alt_name' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ root-ca_req_ext ]' >> "${ROOT_CNF_FILE}"
-echo 'subjectKeyIdentifier        = hash' >> "${ROOT_CNF_FILE}"
-echo 'subjectAltName              = @subject_alt_name' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ distinguished_name ]' >> "${ROOT_CNF_FILE}"
-echo 'countryName                 = US' >> "${ROOT_CNF_FILE}"
-echo 'countryName_default         = US' >> "${ROOT_CNF_FILE}"
-echo 'countryName_min             = 2' >> "${ROOT_CNF_FILE}"
-echo 'countryName_max             = 2' >> "${ROOT_CNF_FILE}"
-echo 'stateOrProvinceName         = State' >> "${ROOT_CNF_FILE}"
-echo "stateOrProvinceName_default = ${CA_STATE}" >> "${ROOT_CNF_FILE}"
-echo 'localityName                = Locality Name (eg City)' >> "${ROOT_CNF_FILE}"
-echo "localityName_default        = ${CA_LOCALITY}" >> "${ROOT_CNF_FILE}"
-echo '0.organizationName          = Organization Name (eg Company)' >> "${ROOT_CNF_FILE}"
-echo "0.organizationName_default  = ${CA_NAME}" >> "${ROOT_CNF_FILE}"
-echo 'commonName                  = Common Name (eg your servers hostname)' >> "${ROOT_CNF_FILE}"
-echo 'commonName_max              = 64' >> "${ROOT_CNF_FILE}"
-echo 'emailAddress                = Email Address' >> "${ROOT_CNF_FILE}"
-echo 'emailAddress_max            = 64' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ root-ca_ext ]' >> "${ROOT_CNF_FILE}"
-echo 'basicConstraints            = critical, CA:true' >> "${ROOT_CNF_FILE}"
-echo 'keyUsage                    = critical, keyCertSign, cRLSign' >> "${ROOT_CNF_FILE}"
-echo 'nameConstraints             = critical, @name_constraints' >> "${ROOT_CNF_FILE}"
-echo 'subjectKeyIdentifier        = hash' >> "${ROOT_CNF_FILE}"
-echo 'subjectAltName              = @subject_alt_name' >> "${ROOT_CNF_FILE}"
-echo 'authorityKeyIdentifier      = keyid:always' >> "${ROOT_CNF_FILE}"
-echo 'issuerAltName               = issuer:copy' >> "${ROOT_CNF_FILE}"
-echo 'authorityInfoAccess         = @auth_info_access' >> "${ROOT_CNF_FILE}"
-echo 'crlDistributionPoints       = @crl_dist' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ intermed-ca_ext ]' >> "${ROOT_CNF_FILE}"
-echo 'basicConstraints            = critical, CA:true, pathlen:0' >> "${ROOT_CNF_FILE}"
-echo 'keyUsage                    = critical, keyCertSign, cRLSign, digitalSignature' >> "${ROOT_CNF_FILE}"
-echo 'subjectKeyIdentifier        = hash' >> "${ROOT_CNF_FILE}"
-echo 'subjectAltName              = @subject_alt_name' >> "${ROOT_CNF_FILE}"
-echo 'authorityKeyIdentifier      = keyid:always' >> "${ROOT_CNF_FILE}"
-echo 'issuerAltName               = issuer:copy' >> "${ROOT_CNF_FILE}"
-echo 'authorityInfoAccess         = @auth_info_access' >> "${ROOT_CNF_FILE}"
-echo 'crlDistributionPoints       = @crl_dist' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ crl_ext ]' >> "${ROOT_CNF_FILE}"
-echo 'authorityKeyIdentifier      = keyid:always' >> "${ROOT_CNF_FILE}"
-echo 'issuerAltName               = issuer:copy' >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ subject_alt_name ]' >> "${ROOT_CNF_FILE}"
-echo "URI                         = http://ca.${ROOT_DOMAIN}/" >> "${ROOT_CNF_FILE}"
-echo "email                       = certmaster@${ROOT_DOMAIN}" >> "${ROOT_CNF_FILE}"
-echo '' >> "${ROOT_CNF_FILE}"
-echo '[ name_constraints ]' >> "${ROOT_CNF_FILE}"
+unset CA_HOME
 
+echo "Created the private openssl .rnd file."
+touch "${ROOT_DIR}/private/.rnd"
+
+export CA_HOME="${ROOT_DIR}"
+
+echo
+
+echo "RANDFILE                          = ${ROOT_DIR}/private/.rnd"                         >> "${ROOT_CNF_FILE}"
+echo '[ ca ]'                                                                               >> "${ROOT_CNF_FILE}"
+echo 'default_ca                        = root_ca'                                          >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ root_ca ]'                                                                          >> "${ROOT_CNF_FILE}"
+echo "dir                               = ${ROOT_DIR}"                                      >> "${ROOT_CNF_FILE}"
+echo 'certs                             = $dir/certs'                                       >> "${ROOT_CNF_FILE}"
+echo 'crl_dir                           = $dir/crl'                                         >> "${ROOT_CNF_FILE}"
+echo 'new_certs_dir                     = $dir/newcerts'                                    >> "${ROOT_CNF_FILE}"
+echo "database                          = \$dir/${ROOT_DOMAIN}.root-ca.index"               >> "${ROOT_CNF_FILE}"
+echo "serial                            = \$dir/${ROOT_DOMAIN}.root-ca.serial"              >> "${ROOT_CNF_FILE}"
+echo "rand_serial                       = yes"                                              >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo "certificate                       = \$dir/${ROOT_DOMAIN}.root-ca.cert.pem"            >> "${ROOT_CNF_FILE}"
+echo "private_key                       = \$dir/private/${ROOT_DOMAIN}.root-ca.key.pem"     >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo "crlnumber                         = \$dir/crl/${ROOT_DOMAIN}.root-ca.crlnum"          >> "${ROOT_CNF_FILE}"
+echo "crl                               = \$dir/crl/${ROOT_DOMAIN}.root-ca.crl"             >> "${ROOT_CNF_FILE}"
+echo 'crl_extensions                    = crl_ext'                                          >> "${ROOT_CNF_FILE}"
+echo 'default_crl_days                  = 180'                                              >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo 'default_md                        = sha256'                                           >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo 'name_opt                          = multiline, align'                                 >> "${ROOT_CNF_FILE}"
+echo 'cert_opt                          = no_pubkey'                                        >> "${ROOT_CNF_FILE}"
+echo 'default_days                      = 3333'                                             >> "${ROOT_CNF_FILE}"
+echo 'preserve                          = no'                                               >> "${ROOT_CNF_FILE}"
+echo 'policy                            = policy_strict'                                    >> "${ROOT_CNF_FILE}"
+echo 'copy_extensions                   = copy'                                             >> "${ROOT_CNF_FILE}"
+echo 'email_in_dn                       = no'                                               >> "${ROOT_CNF_FILE}"
+echo 'unique_subject                    = no'                                               >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[policy_strict]'                                                                      >> "${ROOT_CNF_FILE}"
+echo 'countryName                       = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'stateOrProvinceName               = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'localityName                      = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'organizationName                  = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'emailAddress                      = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'organizationalUnitName            = optional'                                         >> "${ROOT_CNF_FILE}"
+echo 'commonName                        = supplied'                                         >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ req ]'                                                                              >> "${ROOT_CNF_FILE}"
+echo 'default_bits                      = 4096'                                             >> "${ROOT_CNF_FILE}"
+echo "default_keyfile                   = private/${ROOT_DOMAIN}.root-ca.key.pem"           >> "${ROOT_CNF_FILE}"
+echo 'encrypt_key                       = yes'                                              >> "${ROOT_CNF_FILE}"
+echo 'default_md                        = sha256'                                           >> "${ROOT_CNF_FILE}"
+echo 'string_mask                       = utf8only'                                         >> "${ROOT_CNF_FILE}"
+echo 'utf8                              = yes'                                              >> "${ROOT_CNF_FILE}"
+echo 'prompt                            = no'                                               >> "${ROOT_CNF_FILE}"
+echo 'req_extensions                    = root-ca_req_ext'                                  >> "${ROOT_CNF_FILE}"
+echo 'distinguished_name                = distinguished_name'                               >> "${ROOT_CNF_FILE}"
+echo 'subjectAltName                    = @subject_alt_name'                                >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ root-ca_req_ext ]'                                                                  >> "${ROOT_CNF_FILE}"
+echo 'subjectKeyIdentifier              = hash'                                             >> "${ROOT_CNF_FILE}"
+echo 'subjectAltName                    = @subject_alt_name'                                >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ distinguished_name ]'                                                               >> "${ROOT_CNF_FILE}"
+#echo 'countryName                       = US'                                               >> "${ROOT_CNF_FILE}"
+#echo 'stateOrProvinceName               = State'                                            >> "${ROOT_CNF_FILE}"
+#echo 'localityName                      = Locality Name'                                    >> "${ROOT_CNF_FILE}"
+#echo '0.organizationName                = Organization Name'                                >> "${ROOT_CNF_FILE}"
+echo "organizationName                  = ${CA_NAME}"                                       >> "${ROOT_CNF_FILE}"
+#echo 'organizationalUnitName            = Organizational Unit Name'                         >> "${ROOT_CNF_FILE}"
+echo "commonName                        = ${ROOT_DOMAIN}"                                   >> "${ROOT_CNF_FILE}"
+echo "emailAddress                      = certmaster@${ROOT_DOMAIN}"                        >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+#echo 'countryName_default               = US'                                               >> "${ROOT_CNF_FILE}"
+#echo "stateOrProvinceName_default       = ${CA_STATE}"                                      >> "${ROOT_CNF_FILE}"
+#echo "localityName_default              = ${CA_LOCALITY}"                                   >> "${ROOT_CNF_FILE}"
+#echo "0.organizationName_default        = ${CA_NAME}"                                       >> "${ROOT_CNF_FILE}"
+#echo "0.organizationalUnitName_default  = ${CA_NAME}"                                       >> "${ROOT_CNF_FILE}"
+#echo 'countryName_min                   = 2'                                                >> "${ROOT_CNF_FILE}"
+#echo 'countryName_max                   = 2'                                                >> "${ROOT_CNF_FILE}"
+#echo 'commonName_max                    = 64'                                               >> "${ROOT_CNF_FILE}"
+#echo 'emailAddress_max                  = 64'                                               >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ root-ca_ext ]'                                                                      >> "${ROOT_CNF_FILE}"
+echo 'basicConstraints                  = critical, CA:true'                                >> "${ROOT_CNF_FILE}"
+echo 'keyUsage                          = critical, keyCertSign, cRLSign, digitalSignature' >> "${ROOT_CNF_FILE}"
+echo 'nameConstraints                   = critical, @name_constraints'                      >> "${ROOT_CNF_FILE}"
+echo 'subjectKeyIdentifier              = hash'                                             >> "${ROOT_CNF_FILE}"
+echo 'subjectAltName                    = @subject_alt_name'                                >> "${ROOT_CNF_FILE}"
+echo 'authorityKeyIdentifier            = keyid:always'                                     >> "${ROOT_CNF_FILE}"
+echo 'issuerAltName                     = issuer:copy'                                      >> "${ROOT_CNF_FILE}"
+echo 'authorityInfoAccess               = @auth_info_access'                                >> "${ROOT_CNF_FILE}"
+echo 'crlDistributionPoints             = @crl_dist'                                        >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ intermed-ca_ext ]'                                                                  >> "${ROOT_CNF_FILE}"
+echo 'basicConstraints                  = critical, CA:true, pathlen:0'                     >> "${ROOT_CNF_FILE}"
+echo 'keyUsage                          = critical, keyCertSign, cRLSign, digitalSignature' >> "${ROOT_CNF_FILE}"
+echo 'subjectKeyIdentifier              = hash'                                             >> "${ROOT_CNF_FILE}"
+echo 'subjectAltName                    = @subject_alt_name'                                >> "${ROOT_CNF_FILE}"
+echo 'authorityKeyIdentifier            = keyid:always'                                     >> "${ROOT_CNF_FILE}"
+echo 'issuerAltName                     = issuer:copy'                                      >> "${ROOT_CNF_FILE}"
+echo 'authorityInfoAccess               = @auth_info_access'                                >> "${ROOT_CNF_FILE}"
+echo 'crlDistributionPoints             = @crl_dist'                                        >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ crl_ext ]'                                                                          >> "${ROOT_CNF_FILE}"
+echo 'authorityKeyIdentifier            = keyid:always'                                     >> "${ROOT_CNF_FILE}"
+echo 'issuerAltName                     = issuer:copy'                                      >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ subject_alt_name ]'                                                                 >> "${ROOT_CNF_FILE}"
+echo "URI                               = http://ca.${ROOT_DOMAIN}/"                        >> "${ROOT_CNF_FILE}"
+echo "email                             = certmaster@${ROOT_DOMAIN}"                        >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ auth_info_access ]'                                                                 >> "${ROOT_CNF_FILE}"
+echo "caIssuers;URI                     = http://ca.${ROOT_DOMAIN}/certs/Root_CA.crt"       >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ crl_dist ]'                                                                         >> "${ROOT_CNF_FILE}"
+echo "URI.1                             = http://ca.${ROOT_DOMAIN}/crl/Root_CA.crl"         >> "${ROOT_CNF_FILE}"
+echo ''                                                                                     >> "${ROOT_CNF_FILE}"
+echo '[ name_constraints ]'                                                                 >> "${ROOT_CNF_FILE}"
 declare -i counter
 counter=1
 for item in "${domains[@]}"; do
-  echo "permitted;DNS.${counter}    = ${item}" >> "${ROOT_CNF_FILE}"
+  echo "permitted;DNS.${counter}    = ${item}"                                              >> "${ROOT_CNF_FILE}"
   ((counter++))
 done
-echo "permitted;DNS.${counter}    = lan"
+echo "permitted;DNS.${counter}    = lan"                                                    >> "${ROOT_CNF_FILE}"
 counter=1
 for item in "${domains[@]}"; do
-  echo "permitted;email.${counter} = ${item}" >> "${ROOT_CNF_FILE}"
+  echo "permitted;email.${counter} = ${item}"                                               >> "${ROOT_CNF_FILE}"
   ((counter++))
 done
-echo "permitted;email.${counter}  = lan"
-echo "" >> "${ROOT_CNF_FILE}"
-echo '[ auth_info_access ]' >> "${ROOT_CNF_FILE}"
-echo "caIssuers;URI               = http://ca.${ROOT_DOMAIN}/certs/Root_Certificate_Authority.pem" >> "${ROOT_CNF_FILE}"
-echo "" >> "${ROOT_CNF_FILE}"
-echo '[ crl_dist ]' >> "${ROOT_CNF_FILE}"
-echo "URI.1                       = http://ca.${ROOT_DOMAIN}/crl/Root_Certificate_Authrity.crl" >> "${ROOT_CNF_FILE}"
+echo "permitted;email.${counter}  = lan"                                                    >> "${ROOT_CNF_FILE}"
+
 
 echo "DONE creating ${ROOT_CNF_FILE}!"
+
+echo "Defining the Intermediate Certificate's dependencies..."
 
 declare INTERMED_DIR
 INTERMED_DIR="${BASE_DIR}/intermed-ca"
@@ -264,31 +359,51 @@ INTERMED_CRT_FILE="${INTERMED_DIR}/${ROOT_DOMAIN}.intermed-ca.cert.pem"
 declare INTERMED_SERIAL_FILE
 INTERMED_SERIAL_FILE="${INTERMED_DIR}/${ROOT_DOMAIN}.intermed-ca.serial"
 
-declare ROOT_CRL_FILE
+declare INTERMED_CRL_FILE
 INTERMED_CRL_FILE="${INTERMED_DIR}/crl/${ROOT_DOMAIN}.intermed-ca.crl"
 
-declare ROOT_CRLNUM_FILE
-INTERMED_CRL_FILE="${INTERMED_DIR}/crl/${ROOT_DOMAIN}.intermed-ca.crlnum"
+declare INTERMED_CRLNUM_FILE
+INTERMED_CRLNUM_FILE="${INTERMED_DIR}/crl/${ROOT_DOMAIN}.intermed-ca.crlnum"
+
+declare INTERMED_INDEX_FILE
+INTERMED_INDEX_FILE="${INTERMED_DIR}/${ROOT_DOMAIN}.intermed-ca.index"
+
+echo "Creating the directories inside ${INTERMED_DIR}"
 
 cd "${INTERMED_DIR}"
-mkdir -p {certreqs,certs,crl,newcerts,private}
+mkdir -p "${INTERMED_DIR}/certreqs"
+mkdir -p "${INTERMED_DIR}/certs"
+mkdir -p "${INTERMED_DIR}/crl"
+mkdir -p "${INTERMED_DIR}/newcerts"
+mkdir -p "${INTERMED_DIR}/private"
 
+echo "Securing the intermediate certificate's private key directory"
 chmod 0700 private
+
+echo "Intermediate CA's directory: ${INTERMED_DIR}"
+tree -L 5 "${INTERMED_DIR}"
+
+echo "Created the intermediate private key's openssl .rnd file."
+touch "${INTERMED_DIR}/private/.rnd"
 
 echo "Creating the ${INTERMED_CNF_FILE} file..."
 
-echo 'CA_HOME                 = .' >> "${INTERMED_CNF_FILE}"
+unset CA_HOME
+
+export CA_HOME="${INTERMED_DIR}"
+
+echo "CA_HOME                 = ${INTERMED_DIR}" >> "${INTERMED_CNF_FILE}"
 echo 'oid_section             = new_oids' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
 echo '[ new_oids ]' >> "${INTERMED_CNF_FILE}"
-echo 'xmppAddr                = 1.3.6.1.5.5.7.8.5' >> "${INTERMED_CNF_FILE}"
+#echo 'xmppAddr                = 1.3.6.1.5.5.7.8.5' >> "${INTERMED_CNF_FILE}"
 echo 'dnsSRV                  = 1.3.6.1.5.5.7.8.7' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
 echo '[ ca ]' >> "${INTERMED_CNF_FILE}"
 echo 'default_ca              = intermed_ca' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
 echo '[ intermed_ca ]' >> "${INTERMED_CNF_FILE}"
-echo 'dir                     = $ENV::CA_HOME' >> "${INTERMED_CNF_FILE}"
+echo "dir                     = ${INTERMED_DIR}" >> "${INTERMED_CNF_FILE}"
 echo 'certs                   = $dir/certs' >> "${INTERMED_CNF_FILE}"
 echo "serial                  = \$dir/${ROOT_DOMAIN}.intermed-ca.serial" >> "${INTERMED_CNF_FILE}"
 echo "database                = \$dir/${ROOT_DOMAIN}.intermed-ca.index" >> "${INTERMED_CNF_FILE}"
@@ -335,13 +450,14 @@ echo 'default_md              = sha256' >> "${INTERMED_CNF_FILE}"
 echo 'string_mask             = utf8only' >> "${INTERMED_CNF_FILE}"
 echo 'utf8                    = yes' >> "${INTERMED_CNF_FILE}"
 echo 'prompt                  = no' >> "${INTERMED_CNF_FILE}"
-echo 'req_extensions          = intermed-ca_req_ext' >> "${INTERMED_CNF_FILE}"
+echo 'req_extensions          = req_ext' >> "${INTERMED_CNF_FILE}"
 echo 'distinguished_name      = distinguished_name' >> "${INTERMED_CNF_FILE}"
 echo 'subjectAltName          = @subject_alt_name' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
-echo '[ intermed-ca_req_ext ]' >> "${INTERMED_CNF_FILE}"
+echo '[ req_ext ]' >> "${INTERMED_CNF_FILE}"
 echo 'subjectKeyIdentifier    = hash' >> "${INTERMED_CNF_FILE}"
 echo 'subjectAltName          = @subject_alt_name' >> "${INTERMED_CNF_FILE}"
+#echo 'xmppAddr                = @{xmppAddr}' >> "${INTERMED_CNF_FILE}"
 echo '' >> "${INTERMED_CNF_FILE}"
 echo '[ distinguished_name ]' >> "${INTERMED_CNF_FILE}"
 echo "organizationName        = ${CA_NAME}" >> "${INTERMED_CNF_FILE}"
@@ -395,11 +511,15 @@ echo "DONE creating ${INTERMED_CNF_FILE}!"
 
 cd "${ROOT_DIR}"
 
+echo "Creating the Root CA's index file."
 touch "${ROOT_INDEX_FILE}"
+
+echo "Creating the Root CA's CRLNum file."
 echo 00 > "${ROOT_CRLNUM_FILE}"
-openssl rand -hex 16 > "${ROOT_SERIAL_FILE}"
 
 export OPENSSL_CONF="${ROOT_CNF_FILE}"
+
+echo
 
 declare ROOT_ALGORITHM
 declare ROOT_ALGORITHM_LOWER
@@ -437,11 +557,15 @@ declare SUGGEST_ROOT_PASSWD
 SUGGEST_ROOT_PASSWD="$(generate_random_password 72)"
 echo "${SUGGEST_ROOT_PASSWD}" | tee -a "${FILE_ROOT_PASSWD}" > /dev/null
 chmod 0400 "${FILE_ROOT_PASSWD}"
+echo "Generated a secure password for the Root Certificate Authority and saved it inside ${FILE_ROOT_PASSWD} with 0400 permissions."
+echo
 
 declare SUGGEST_INTERMED_PASSWD
 SUGGEST_INTERMED_PASSWD="$(generate_random_password 72)"
 echo "${SUGGEST_INTERMED_PASSWD}" | tee -a "${FILE_INTERMED_PASSWD}" > /dev/null
 chmod 0400 "${FILE_INTERMED_PASSWD}"
+echo "Generated a secure password for the Intermediate Certificate Authority and saved it inside ${FILE_INTERMED_PASSWD} with 0400 permissions."
+echo
 
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
 
@@ -475,6 +599,7 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
   done
 
   echo "${ROOT_ALGO_CURVE}" | tee -a "${BASE_DIR}/passwd/.root-ca.ecc-curve" > /dev/null
+  echo "Saved the Elliptic Curve choice to ${BASE_DIR}/passwd/.root-ca.ecc-curve"
 
   case "${ROOT_ALGO_CURVE}" in
     prime256v1) 
@@ -493,8 +618,10 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
       openssl genpkey -algorithm ED25519 -out "${ROOT_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
       ;;
   esac
+  echo "Generated the Root CA's private key file: ${ROOT_KEY_FILE}"
 
-  openssl req -new -sha512 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}"
+  openssl req -new -sha512 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}" -passin "file:${FILE_ROOT_PASSWD}"
+  echo "Generated the Root CA's CSR file: ${ROOT_CSR_FILE}"
 else
   while true; do
     echo "Which RSA bit length shall be used for ${ROOT_DOMAIN} Root Certificate Authority? "
@@ -524,13 +651,19 @@ else
   done
 
   openssl genrsa -aes256 -out "${ROOT_KEY_FILE}" -passout "file:${FILE_ROOT_PASSWD}" "${ROOT_BIT_LENGTH}"
+  echo "Generated the Root CA's private key file: ${ROOT_KEY_FILE}"
+
   openssl req -new -sha256 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -passin "file:${FILE_ROOT_PASSWD}" -out "${ROOT_CSR_FILE}"
+  echo "Generated the Root CA's CSR file: ${ROOT_CSR_FILE}"
 fi
 
 chmod 0400 "${ROOT_KEY_FILE}"
+echo "Secured the Root CA's private key."
 
 openssl rand -hex 16 > "${ROOT_SERIAL_FILE}"
+echo "Generated a random serial for the Root CA at ${ROOT_SERIAL_FILE}"
 
+echo "Signing the Root CA..."
 openssl ca -selfsign \
            -in "${ROOT_CSR_FILE}" \
            -out "${ROOT_CRT_FILE}" \
@@ -539,53 +672,34 @@ openssl ca -selfsign \
            -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
            -passin "file:${FILE_ROOT_PASSWD}"
 
+echo "Here's the new Root CA header..."
 openssl x509 -in "${ROOT_CRT_FILE}" \
              -noout \
              -text \
              -certopt no_version,no_pubkey,no_sigdump \
              -nameopt multiline
 
-openssl verify -verbose \
-               -CAfile "${ROOT_CRT_FILE}" "${ROOT_CRT_FILE}"
-
+echo "Generating the Certificate Revoke List (CRL) for the Root CA at ${ROOT_CRL_FILE}"
 openssl ca -gencrl \
            -out "${ROOT_CRL_FILE}" \
            -passin "file:${FILE_ROOT_PASSWD}"
 
-declare INSTALL_ROOT_CERT
-if [[ $(sudo -v cp) || test -w "/etc/ssl/certs" ]]; then
-  while true; do
-    read -r -p "Install certificate $(basename "${ROOT_CRT_FILE}") inside /etc/ssl/certs? (requires sudo) [y|n]: " INSTALL_ROOT_CERT
-    echo
-    case "${INSTALL_ROOT_CERT}" in
-      # Yy) { AA && AB } || B ;;
-      Yy) { !$(sudo -v cp) && sudo cp "${ROOT_CRT_FILE}" "${SYS_ROOT_CRT_FILE}" } || cp "${ROOT_CRT_FILE}" "${SYS_ROOT_CRT_FILE}" ;;
-      Nn) break;;
-      *) echo "Invalid option ${INSTALL_ROOT_CERT}.";;
-    esac
-  done
-fi
-
-declare UPDATE_CA_CERTIFICATES
-if [[ $(sudo -v update-ca-certificates) ]]; then
-  while true; do
-    read -r -p "Execute update-ca-certificates? (requires sudo) [y|n]: " UPDATE_CA_CERTIFICATES
-    echo
-    case "${UPDATE_CA_CERTIFICATES}" in 
-      Yy) sudo update-ca-certificates;;
-      Nn) break;;
-      *) echo "Invalid option ${UPDATE_CA_CERTIFICATES}.";; 
-    esac
-  done
-fi
+cp "${ROOT_CRT_FILE}" "${BASE_DIR}/certificates/Root_Certificate_Authority.${ROOT_DOMAIN}.crt"
+echo "Copied the $(basename "${ROOT_CRT_FILE}") into ${BASE_DIR}/certificates"
 
 unset OPENSSL_CONF
 
+echo "Moving into the Intermediate Certificate's workspace at ${INTERMED_DIR}"
 cd "${INTERMED_DIR}"
 
 touch "${INTERMED_INDEX_FILE}"
+echo "Created the intermediate index file at ${INTERMED_INDEX_FILE}"
+
 echo 00 > "${INTERMED_CRLNUM_FILE}"
+echo "Assigned 00 to the intermediate CRLNum file ${INTERMED_CRLNUM_FILE}"
+
 openssl rand -hex 16 > "${INTERMED_SERIAL_FILE}"
+echo "Created the intermediate serial file ${INTERMED_SERIAL_FILE}"
 
 export OPENSSL_CONF="${INTERMED_CNF_FILE}"
 
@@ -607,24 +721,30 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
       openssl genpkey -algorithm ED25519 -out "${INTERMED_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
   esac
+  echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
 
   openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"
+  echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 else
   openssl genrsa -aes256 -out "${INTERMED_KEY_FILE}" -passout "file:${FILE_INTERMED_PASSWD}" "${ROOT_BIT_LENGTH}"
+  echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
   openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -passin "file:${FILE_INTERMED_PASSWD}" -out "${INTERMED_CSR_FILE}"
+  echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 fi
 
 chmod 0400 "${INTERMED_KEY_FILE}"
-
+echo "Secured the intermediate certificate's private key file ${INTERMED_KEY_FILE}"
 
 cp "${INTERMED_CSR_FILE}" "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")"
+echo "Copied $(basename "${INTERMED_CSR_FILE}") into ${ROOT_DIR}/certreqs"
 
 unset OPENSSL_CONF
 
 export OPENSSL_CONF="${ROOT_CNF_FILE}"
 
-openssl rand -hex 16 > ${ROOT_SERIAL_FILE}
+cd "${INTERMED_DIR}"
 
+echo "Signing the intermediate certificate with the Root CA..."
 openssl ca -in "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")" \
            -out "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
            -extensions "intermed-ca_ext" \
@@ -632,51 +752,35 @@ openssl ca -in "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")" \
            -enddate `date +%y%m%d000000Z -u -d +9years+99days` \
            -passin "file:${FILE_ROOT_PASSWD}"
 
+echo "Verifying the intermediate certificate..."
 openssl x509 -in "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
              -noout \
              -text \
              -certopt no_version,no_pubkey,no_sigdump \
              -nameopt multiline
 
-openssl verify -verbose \
-               -CAfile "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem"
-
-
 cp "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
+echo "Copied ${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem into ${INTERMED_CRT_FILE}"
+
+cp "${INTERMED_CRT_FILE}" "${BASE_DIR}/certificates/Intermediate_Certificate_Authority.${ROOT_DOMAIN}.crt"
+echo "Copied $(basename "${INTERMED_CRT_FILE}") into ${BASE_DIR}/certificates"
 
 openssl verify -verbose \
-               -CAfile "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
+               -CAfile "${ROOT_CRT_FILE}" "${INTERMED_CRT_FILE}"
+echo "Verifed the intermediate certificate against the root certificate"
 
 openssl ca -gencrl \
            -out "${INTERMED_CRL_FILE}" \
            -passin "file:${FILE_INTERMED_PASSWD}"
+echo "Generated certificate revoke list (CRL) for the intermediate certificate at ${INTERMED_CRL_FILE}"
 
+echo "We recommend that you copy these into /etc/ssl/certs..."
+echo
+echo "  sudo cp ${ROOT_CRT_FILE} /etc/ssl/certs/$(basename "${ROOT_CRT_FILE}")"
+echo "  sudo cp ${INTERMED_CRT_FILE} /etc/ssl/certs/$(basename "${INTERMED_CRT_FILE}")"
+echo "  sudo update-ca-certificates"
+echo 
 
-declare INSTALL_INTERMED_CERT
-if [[ $(sudo -v cp) || test -w "/etc/ssl/certs" ]]; then
-  while true; do
-    read -r -p "Install certificate $(basename "${INTERMED_CRT_FILE}") inside /etc/ssl/certs? (requires sudo) [y|n]: " INSTALL_INTERMED_CERT
-    echo
-    case "${INSTALL_INTERMED_CERT}" in
-      # Yy) { AA && AB } || B ;;
-      Yy) { !$(sudo -v cp) && sudo cp "${INTERMED_CRT_FILE}" "${SYS_INTERMED_CRT_FILE}" } || cp "${INTERMED_CRT_FILE}" "${SYS_INTERMED_CRT_FILE}" ;;
-      Nn) break;;
-      *) echo "Invalid option ${INSTALL_INTERMED_CERT}.";;
-    esac
-  done
-fi
-
-if [[ $(sudo -v update-ca-certificates) ]]; then
-  while true; do
-    read -r -p "Execute update-ca-certificates? (requires sudo) [y|n]: " UPDATE_CA_CERTIFICATES
-    echo
-    case "${UPDATE_CA_CERTIFICATES}" in 
-      Yy) sudo update-ca-certificates;;
-      Nn) break;;
-      *) echo "Invalid option ${UPDATE_CA_CERTIFICATES}.";; 
-    esac
-  done
-fi
 unset OPENSSL_CONF
 
 
