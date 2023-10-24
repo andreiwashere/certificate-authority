@@ -567,6 +567,9 @@ chmod 0400 "${FILE_INTERMED_PASSWD}"
 echo "Generated a secure password for the Intermediate Certificate Authority and saved it inside ${FILE_INTERMED_PASSWD} with 0400 permissions."
 echo
 
+openssl rand -hex 16 > "${ROOT_SERIAL_FILE}"
+echo "Generated a random serial for the Root CA at ${ROOT_SERIAL_FILE}"
+
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
 
   while true; do
@@ -603,25 +606,52 @@ if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
 
   case "${ROOT_ALGO_CURVE}" in
     prime256v1) 
-      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:prime256v1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${ROOT_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:prime256v1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_ROOT_PASSWD}"
       ;;
     secp384r1) 
-      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${ROOT_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:secp384r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_ROOT_PASSWD}"
       ;;
     brainpoolP512r1) 
-      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:brainpoolP512r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${ROOT_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:brainpoolP512r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_ROOT_PASSWD}"
       ;;
     nistp521) 
-      openssl genpkey -algorithm EC -out "${ROOT_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp521r1 -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${ROOT_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:secp521r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_ROOT_PASSWD}"
       ;;
     *) # ed25519 or edwards25519 
-      openssl genpkey -algorithm ED25519 -out "${ROOT_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_ROOT_PASSWD}"
+      openssl genpkey -algorithm ED25519 \
+                      -out "${ROOT_KEY_FILE}" \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_ROOT_PASSWD}"
       ;;
   esac
   echo "Generated the Root CA's private key file: ${ROOT_KEY_FILE}"
 
-  openssl req -new -sha512 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -out "${ROOT_CSR_FILE}" -passin "file:${FILE_ROOT_PASSWD}"
-  echo "Generated the Root CA's CSR file: ${ROOT_CSR_FILE}"
+  openssl req -new \
+              -x509 \
+              -sha512 \
+              -days 6273 \
+              -config "${ROOT_CNF_FILE}" \
+              -extensions "root-ca_ext" \
+              -key "${ROOT_KEY_FILE}" \
+              -out "${ROOT_CRT_FILE}" \
+              -passin "file:${FILE_ROOT_PASSWD}"
+  echo "Generated the Root CA's CRT file: ${ROOT_CRT_FILE}"
 else
   while true; do
     echo "Which RSA bit length shall be used for ${ROOT_DOMAIN} Root Certificate Authority? "
@@ -650,27 +680,25 @@ else
     fi
   done
 
-  openssl genrsa -aes256 -out "${ROOT_KEY_FILE}" -passout "file:${FILE_ROOT_PASSWD}" "${ROOT_BIT_LENGTH}"
+  openssl genrsa -aes256 \
+                 -out "${ROOT_KEY_FILE}" \
+                 -passout "file:${FILE_ROOT_PASSWD}" \
+                 "${ROOT_BIT_LENGTH}"
   echo "Generated the Root CA's private key file: ${ROOT_KEY_FILE}"
 
-  openssl req -new -sha256 -config "${ROOT_CNF_FILE}" -key "${ROOT_KEY_FILE}" -passin "file:${FILE_ROOT_PASSWD}" -out "${ROOT_CSR_FILE}"
-  echo "Generated the Root CA's CSR file: ${ROOT_CSR_FILE}"
+  openssl req -new \
+              -sha256 \
+              -x509 \
+              -config "${ROOT_CNF_FILE}" \
+              -extensions "root-ca_ext" \
+              -key "${ROOT_KEY_FILE}" \
+              -passin "file:${FILE_ROOT_PASSWD}" \
+              -out "${ROOT_CRT_FILE}"
+  echo "Generated the Root CA's CRT file: ${ROOT_CRT_FILE}"
 fi
 
 chmod 0400 "${ROOT_KEY_FILE}"
 echo "Secured the Root CA's private key."
-
-openssl rand -hex 16 > "${ROOT_SERIAL_FILE}"
-echo "Generated a random serial for the Root CA at ${ROOT_SERIAL_FILE}"
-
-echo "Signing the Root CA..."
-openssl ca -selfsign \
-           -in "${ROOT_CSR_FILE}" \
-           -out "${ROOT_CRT_FILE}" \
-           -extensions "root-ca_ext" \
-           -startdate `date +%y%m%d000000Z -u -d -1day` \
-           -enddate `date +%y%m%d000000Z -u -d +17years+17days` \
-           -passin "file:${FILE_ROOT_PASSWD}"
 
 echo "Here's the new Root CA header..."
 openssl x509 -in "${ROOT_CRT_FILE}" \
@@ -681,6 +709,7 @@ openssl x509 -in "${ROOT_CRT_FILE}" \
 
 echo "Generating the Certificate Revoke List (CRL) for the Root CA at ${ROOT_CRL_FILE}"
 openssl ca -gencrl \
+           -config "${ROOT_CNF_FILE}" \
            -out "${ROOT_CRL_FILE}" \
            -passin "file:${FILE_ROOT_PASSWD}"
 
@@ -692,6 +721,8 @@ unset OPENSSL_CONF
 echo "Moving into the Intermediate Certificate's workspace at ${INTERMED_DIR}"
 cd "${INTERMED_DIR}"
 
+export OPENSSL_CONF="${INTERMED_CNF_FILE}"
+
 touch "${INTERMED_INDEX_FILE}"
 echo "Created the intermediate index file at ${INTERMED_INDEX_FILE}"
 
@@ -701,67 +732,103 @@ echo "Assigned 00 to the intermediate CRLNum file ${INTERMED_CRLNUM_FILE}"
 openssl rand -hex 16 > "${INTERMED_SERIAL_FILE}"
 echo "Created the intermediate serial file ${INTERMED_SERIAL_FILE}"
 
-export OPENSSL_CONF="${INTERMED_CNF_FILE}"
-
 if grep -q "ecc" <<< "${ROOT_ALGORITHM_LOWER}"; then
   case "${ROOT_ALGO_CURVE}" in
     prime256v1) 
-      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:prime256v1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${INTERMED_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:prime256v1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
     secp384r1) 
-      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp384r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${INTERMED_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:secp384r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
     brainpoolP512r1) 
-      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:brainpoolP512r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${INTERMED_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:brainpoolP512r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
     nistp521) 
-      openssl genpkey -algorithm EC -out "${INTERMED_KEY_FILE}" -pkeyopt ec_paramgen_curve:secp521r1 -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      openssl genpkey -algorithm EC \
+                      -out "${INTERMED_KEY_FILE}" \
+                      -pkeyopt ec_paramgen_curve:secp521r1 \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
     *) # ed25519 or edwards25519 
-      openssl genpkey -algorithm ED25519 -out "${INTERMED_KEY_FILE}" -aes-256-cbc -pass "file:${FILE_INTERMED_PASSWD}"
+      openssl genpkey -algorithm ED25519 \
+                      -out "${INTERMED_KEY_FILE}" \
+                      -aes-256-cbc \
+                      -pass "file:${FILE_INTERMED_PASSWD}"
       ;;
   esac
   echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
 
-  openssl req -new -sha512 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -out "${INTERMED_CSR_FILE}"  -passin "file:${FILE_INTERMED_PASSWD}"
+  openssl req -new \
+              -sha512 \
+              -config "${INTERMED_CNF_FILE}" \
+              -key "${INTERMED_KEY_FILE}" \
+              -out "${INTERMED_CSR_FILE}"  \
+              -passin "file:${FILE_INTERMED_PASSWD}"
   echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 else
-  openssl genrsa -aes256 -out "${INTERMED_KEY_FILE}" -passout "file:${FILE_INTERMED_PASSWD}" "${ROOT_BIT_LENGTH}"
+  openssl genrsa -aes256 \
+                 -out "${INTERMED_KEY_FILE}" \
+                 -passout "file:${FILE_INTERMED_PASSWD}" \
+                 "${ROOT_BIT_LENGTH}"
   echo "Generated the Intermediate Certificate's private key file ${INTERMED_KEY_FILE}"
 
-  openssl req -new -sha256 -config "${INTERMED_CNF_FILE}" -key "${INTERMED_KEY_FILE}" -passin "file:${FILE_INTERMED_PASSWD}" -out "${INTERMED_CSR_FILE}"
+  openssl req -new \
+              -sha256 \
+              -config "${INTERMED_CNF_FILE}" \
+              -key "${INTERMED_KEY_FILE}" \
+              -passin "file:${FILE_INTERMED_PASSWD}" \
+              -out "${INTERMED_CSR_FILE}"
   echo "Generated the Intermediate Certificate's signing request file ${INTERMED_CSR_FILE}"
 fi
 
 chmod 0400 "${INTERMED_KEY_FILE}"
 echo "Secured the intermediate certificate's private key file ${INTERMED_KEY_FILE}"
 
-cp "${INTERMED_CSR_FILE}" "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")"
+declare INTERMED_CSR_IN_ROOT_DIR
+INTERMED_CSR_IN_ROOT_DIR="${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")"
+
+cp "${INTERMED_CSR_FILE}" "${INTERMED_CSR_IN_ROOT_DIR}"
 echo "Copied $(basename "${INTERMED_CSR_FILE}") into ${ROOT_DIR}/certreqs"
 
 unset OPENSSL_CONF
 
+declare INTERMED_CRT_IN_ROOT_DIR
+INTERMED_CRT_IN_ROOT_DIR="${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem"
 
 cd "${ROOT_DIR}"
 
 export OPENSSL_CONF="${ROOT_CNF_FILE}"
 
 echo "Signing the intermediate certificate with the Root CA..."
-openssl ca -in "${ROOT_DIR}/certreqs/$(basename "${INTERMED_CSR_FILE}")" \
-           -out "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
+openssl ca -config "${ROOT_CNF_FILE}" \
+           -in "${INTERMED_CSR_IN_ROOT_DIR}" \
+           -out "${INTERMED_CRT_IN_ROOT_DIR}" \
            -extensions "intermed-ca_ext" \
            -startdate `date +%y%m%d000000Z -u -d -1day` \
            -enddate `date +%y%m%d000000Z -u -d +17years+17days` \
            -passin "file:${FILE_ROOT_PASSWD}"
 
 echo "Verifying the intermediate certificate..."
-openssl x509 -in "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" \
+openssl x509 -in "${INTERMED_CRT_IN_ROOT_DIR}" \
              -noout \
              -text \
              -certopt no_version,no_pubkey,no_sigdump \
              -nameopt multiline
 
-cp "${ROOT_DIR}/certs/intermed-ca.${ROOT_DOMAIN}.pem" "${INTERMED_CRT_FILE}"
+cp "${INTERMED_CRT_IN_ROOT_DIR}" "${INTERMED_CRT_FILE}"
 echo "Duplicated Intermediate Certificate to ${INTERMED_CRT_FILE}"
 
 cp "${INTERMED_CRT_FILE}" "${BASE_DIR}/certificates/Intermediate_Certificate_Authority.${ROOT_DOMAIN}.crt"
@@ -771,10 +838,15 @@ cat "${INTERMED_CRT_FILE}" "${ROOT_CRT_FILE}" > "${BASE_DIR}/certificates/${ROOT
 
 openssl verify -verbose \
                -CAfile "${ROOT_CRT_FILE}" \
+               "${INTERMED_CRT_FILE}"
+
+openssl verify -verbose \
+               -CAfile "${ROOT_CRT_FILE}" \
                "${BASE_DIR}/certificates/${ROOT_DOMAIN}.ca-bundle.crt"
 echo "Verifed the intermediate certificate against the root certificate"
 
 openssl ca -gencrl \
+           -config "${INTERMED_CNF_FILE}" \
            -out "${INTERMED_CRL_FILE}" \
            -passin "file:${FILE_INTERMED_PASSWD}"
 echo "Generated certificate revoke list (CRL) for the intermediate certificate at ${INTERMED_CRL_FILE}"
@@ -787,5 +859,3 @@ echo "  sudo update-ca-certificates"
 echo 
 
 unset OPENSSL_CONF
-
-
