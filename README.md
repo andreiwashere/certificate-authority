@@ -98,7 +98,7 @@ This assumes that you're using the `/opt/ca` directory for the `BASE_DIR` variab
 ## TODO
 
 - [X] Write `create_root_ca.sh`
-- [ ] Test `create_root_ca.sh`
+- [X] Test `create_root_ca.sh`
 - [ ] Write `new_san_crt.sh`
 - [ ] Test `new_san_crt.sh`
 - [ ] Write `new_tls_crt.sh`
