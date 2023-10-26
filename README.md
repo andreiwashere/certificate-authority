@@ -4,8 +4,7 @@ Be your own certificate authority for development and intranet purposes only.
 ## Installation
 
 ```sh
-URL="https://raw.githubusercontent.com/andreiwashere/certificate-authority/main/create_root_ca.sh"
-wget --secure-protocol=auto --no-cache -O "${URL}" "create_root_ca.sh" < /dev/null > /dev/null 2>&1
+curl -s https://raw.githubusercontent.com/andreiwashere/certificate-authority/main/create_root_ca.sh > create_root_ca.sh
 ```
 
 ## Usage
