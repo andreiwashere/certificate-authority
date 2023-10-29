@@ -5,6 +5,8 @@ Be your own certificate authority for development and intranet purposes only.
 
 ```sh
 curl -s https://raw.githubusercontent.com/andreiwashere/certificate-authority/main/create_root_ca.sh > create_root_ca.sh
+curl -s https://raw.githubusercontent.com/andreiwashere/certificate-authority/main/new_ca_signed_cert.sh > new_ca_signed_cert.sh
+curl -s https://raw.githubusercontent.com/andreiwashere/certificate-authority/main/new_selfsigned_cert.sh > new_selfsigned_cert.sh
 ```
 
 ## Usage
@@ -12,7 +14,26 @@ curl -s https://raw.githubusercontent.com/andreiwashere/certificate-authority/ma
 ```sh
 chmod +x create_root_ca.sh
 ./create_root_ca.sh
+
+chmod +x new_ca_signed_cert.sh
+./new_ca_signed_cert.sh
+
+chmod +x new_selfsigned_cert.sh
+./new_selfsigned_cert.sh
 ```
+
+### Helpful Tips
+
+- Pick an easy to remember path like `/opt/ca` to store your CA.
+- Place only 1 CA per host, otherwise name your directories like: `/opt/ca/mydomain.com` and `/opt/ca/anotherdomain.com`
+- When issuing CA signed certificates, pass the CA directory as the 1st argument as `./new_ca_signed_cert.sh /opt/ca` or `./new_ca_signed_cert.sh /opt/ca/anotherdomain.com`
+- Ensure that if you are issuing a signed certificate against your Root CA that it complies with your name constraints when initially configured. To check them, run:
+  ```bash
+  CA_DIR=/opt/ca
+  ROOT_CRT_FILE=$(find "${CA_DIR}/root-ca" -maxdepth 1 -type f -name "*.root-ca.cert.pem")
+  openssl x509 -in "$ROOT_CRT_FILE" -text -noout | grep "DNS:" | sed 's/DNS://g' | tr -d ' '
+  ```
+  You will be required to use subdomains belonging to any of the constrained names depending on how the Root CA was issued.
 
 ### Prompts
 
@@ -57,51 +78,78 @@ WARNING: This script generates sensitive cryptographic materials. Handle them wi
 
 ## Directory Structure 
 
-This assumes that you're using the `/opt/ca` directory for the `BASE_DIR` variable and your `ROOT_DOMAIN` is `mydomain.com`:
+This assumes that you're using the `/opt/ca` directory for the `BASE_DIR` variable and your `ROOT_DOMAIN` is `example.com`:
 
 ```log
-/opt/ca/root-ca
-/opt/ca/root-ca/mydomain.com.root-ca.cnf
-/opt/ca/root-ca/mydomain.com.root-ca.req.pem
-/opt/ca/root-ca/mydomain.com.root-ca.cert.pem
-/opt/ca/root-ca/mydomain.com.root-ca.serial
-/opt/ca/root-ca/mydomain.com.root-ca.index
-/opt/ca/root-ca/certreqs
-/opt/ca/root-ca/crl
-/opt/ca/root-ca/crl/mydomain.com.root-ca.crl
-/opt/ca/root-ca/crl/mydomain.com.root-ca.crlnum
-/opt/ca/root-ca/certs
-/opt/ca/root-ca/newcerts
-/opt/ca/root-ca/private
-/opt/ca/root-ca/private/mydomain.com.root-ca.key.pem
-/opt/ca/intermed-ca
-/opt/ca/intermed-ca/mydomain.com.intermed-ca.cnf
-/opt/ca/intermed-ca/mydomain.com.intermed-ca.req.pem
-/opt/ca/intermed-ca/mydomain.com.intermed-ca.cert.pem
-/opt/ca/intermed-ca/mydomain.com.intermed-ca.serial
-/opt/ca/intermed-ca/mydomain.com.intermed-ca.index
-/opt/ca/intermed-ca/certreqs
-/opt/ca/intermed-ca/crl
-/opt/ca/intermed-ca/crl/mydomain.com.intermed-ca.crl
-/opt/ca/intermed-ca/crl/mydomain.com.intermed-ca.crlnum
-/opt/ca/intermed-ca/certs
-/opt/ca/intermed-ca/newcerts
-/opt/ca/intermed-ca/private
-/opt/ca/intermed-ca/private/mydomain.com.intermed-ca.key.pem
-/opt/ca/tmp
-/opt/ca/certificates
-/etc/ssl/certs/ROOT-CA.mydomain.com.crt
-/etc/ssl/certs/INTERMED-CA.mydomain.com.crt
+example.com/
+├── certificates
+│   ├── example.com.ca-bundle.crt
+│   ├── Intermediate_Certificate_Authority.example.com.crt
+│   └── Root_Certificate_Authority.example.com.crt
+├── intermed-ca
+│   ├── certreqs
+│   ├── certs
+│   ├── crl
+│   │   ├── example.com.intermed-ca.crl
+│   │   ├── example.com.intermed-ca.crlnum
+│   │   └── example.com.intermed-ca.crlnum.old
+│   ├── example.com.intermed-ca.cert.pem
+│   ├── example.com.intermed-ca.cnf
+│   ├── example.com.intermed-ca.index
+│   ├── example.com.intermed-ca.index.attr
+│   ├── example.com.intermed-ca.index.attr.old
+│   ├── example.com.intermed-ca.index.old
+│   ├── example.com.intermed-ca.req.pem
+│   ├── example.com.intermed-ca.serial
+│   ├── example.com.intermed-ca.serial.old
+│   ├── newcerts
+│   │   ├── 2F5B9C2A1464F78BAD1E3CBBF69704B9.pem
+│   │   ├── BAF282D5DF1F2C64729D7186FD5E1D45.pem
+│   │   ├── D6693DE57B77A0FDC71002195C7E3312.pem
+│   │   └── EBF37D4506457A1003DF6E3EE6969DA4.pem
+│   └── private
+│       └── example.com.intermed-ca.key.pem
+├── issued
+│   └── 20231029
+│       └── redis
+│           ├── redis.ca-bundle.crt
+│           ├── redis.cnf
+│           ├── redis.crt
+│           ├── redis.csr
+│           └── redis.key
+├── passwd
+├── root-ca
+│   ├── certreqs
+│   │   └── example.com.intermed-ca.req.pem
+│   ├── certs
+│   │   └── intermed-ca.example.com.pem
+│   ├── crl
+│   │   ├── example.com.root-ca.crl
+│   │   ├── example.com.root-ca.crlnum
+│   │   └── example.com.root-ca.crlnum.old
+│   ├── example.com.root-ca.cert.pem
+│   ├── example.com.root-ca.cnf
+│   ├── example.com.root-ca.index
+│   ├── example.com.root-ca.index.attr
+│   ├── example.com.root-ca.index.old
+│   ├── example.com.root-ca.serial
+│   ├── newcerts
+│   │   └── 5EB54FF6113CD127626C8E56C8C779AACB560B73.pem
+│   └── private
+│       └── example.com.root-ca.key.pem
+└── tmp
+
+18 directories, 38 files
 ```
 
 ## TODO
 
 - [X] Write `create_root_ca.sh`
 - [X] Test `create_root_ca.sh`
-- [ ] Write `new_san_crt.sh`
-- [ ] Test `new_san_crt.sh`
-- [ ] Write `new_tls_crt.sh`
-- [ ] Test `new_tls_crt.sh`
+- [X] Write `new_san_crt.sh`
+- [X] Test `new_san_crt.sh`
+- [X] Write `new_tls_crt.sh`
+- [X] Test `new_tls_crt.sh`
 - [ ] Write `reissue_crt.sh`
 - [ ] Test `reissue_crt.sh`
 
