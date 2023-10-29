@@ -34,47 +34,9 @@ chmod +x new_selfsigned_cert.sh
   openssl x509 -in "$ROOT_CRT_FILE" -text -noout | grep "DNS:" | sed 's/DNS://g' | tr -d ' '
   ```
   You will be required to use subdomains belonging to any of the constrained names depending on how the Root CA was issued.
+- Please ensure you have the necessary dependencies installed (e.g., openssl) and adequate permissions (e.g., sudo access if you intend to install certificates system-wide).
 
-### Prompts
-
-| Prompt | Default | Variable |
-|--------|---------|----------|
-| Where do you want to save the Root CA? (eg /opt/ca): | `/opt/ca` | `BASE_DIR` |
-| Root Certificate Authority Name: | `<blank>` | `CA_NAME` |
-| City where `${CA_NAME}` is located (eg. Concord):  | NONE | `CA_LOCALITY` |
-| State Code (eg FL) where `${CA_NAME}` is located: | NONE | `CA_STATE` |
-| Root Domain Name (eg. domain.com): | NONE | `ROOT_DOMAIN` | 
-| Add DNS Entry: | NONE | `permitted_domain` |
-| Add another? [y\|n]: | NONE | `choice` |
-| Does this look good? [y\|n]: | NONE | `looks_good` |
-| Which encryption algorithm will `${CA_NAME}` for `${ROOT_DOMAIN}` use? [rsa\|ecc]: | NONE | `ROOT_ALGORITHM` |
-| Which curve shall be used for `${ROOT_DOMAIN}` Root Certificate Authority? [1-5] | NONE | `ROOT_ALGO_CURVE` | 
-| Install certificate `$(basename "${ROOT_CRT_FILE}")` inside /etc/ssl/certs? (requires sudo): | NONE | `INSTALL_ROOT_CERT` | 
-| Execute update-ca-certificates? (requires sudo): | NONE | `UPDATE_CA_CERTIFICATES` |
-
-> `NONE` means the script does not have **any default value** for the associated prompt.
-
-
-## Overview
-
-The script operates interactively and will prompt you for various pieces of information, including:
-  - The directory where you want to save the Root and Intermediate CAs
-  - The name of your Certificate Authority
-  - The city and state where your CA is located
-  - The root domain name for your CA
-  - The encryption algorithm (RSA or ECC) for your CA's private keys
-  - The specific curve (if ECC is selected)
-
-The script will then proceed to:
-  - Create the necessary directory structure
-  - Generate private keys and CSRs
-  - Create the root and intermediate certificates
-  - Optionally, install the certificates in the system's trust store
-  - Optionally, update the system's CA certificates store
-
-Please ensure you have the necessary dependencies installed (e.g., openssl) and adequate permissions (e.g., sudo access if you intend to install certificates system-wide).
-
-WARNING: This script generates sensitive cryptographic materials. Handle them with extreme care and ensure they are adequately secured in production environments.
+**WARNING**: This script generates sensitive cryptographic materials. Handle them with extreme care and ensure they are adequately secured in production environments.
 
 ## Directory Structure 
 
