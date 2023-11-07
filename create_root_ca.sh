@@ -168,15 +168,17 @@ echo "Directory ${ROOT_DIR}/private created!"
 chmod 0700 private
 echo
 
+declare -a domains
+declare domain_break_me
+declare permitted_domain
+declare domain_choice
+declare to_delete_domain_idx
+declare -a tmp_domains
+declare confirm_delete_domains
+declare -i DNSIDX
+declare domain_looks_good
 while true; do
-  declare -a domains
   domains=("${ROOT_DOMAIN}")
-  declare permitted_domain
-  declare domain_choice
-  declare to_delete_domain_idx
-  declare -a tmp_domains
-  declare confirm_delete_domains
-  declare -i DNSIDX
   while true; do
     echo "List of Permitted Domains for Root CA: ${domains[*]}"
     echo
@@ -190,19 +192,26 @@ while true; do
     case "${domain_choice}" in
       [1]*) 
         while true; do 
-          read -r -p "Enter New DNS Entry: " permitted_domain
-          if [[ "${permitted_domain}" == "" ]]; then 
-            echo "Invalid entry! Rejected '${permitted_domain}'."
-            continue
+          read -r -p "Enter New DNS Entry (space separated): " permitted_domain
+          permitted_domain=${permitted_domain// /,}
+          IFS=',' read -ra NEW_DOMAINS_PLAIN <<< "$permitted_domain"
+          valid_domain=true
+          for item in "${NEW_DOMAINS_PLAIN[@]}"; do
+            if [[ ! $item =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then 
+              echo "Invalid entry! Rejected '${item}'."
+              valid_domain=false
+              break
+            fi
+          done
+          if [ "$valid_domain" = true ]; then
+            domains+=("${NEW_DOMAINS_PLAIN[@]}")
+            echo
           fi
-          domains+=("${permitted_domain}")
-          echo
           break
         done
         ;;
       [2]*)
-        declare break_me
-        break_me=0 # a way to get out of the parent loop
+        domain_break_me=0 # a way to get out of the parent loop
         while true; do
           DNSIDX=1
           echo "Choose a DNS Entry to delete: "
@@ -218,7 +227,7 @@ while true; do
             break
           fi
           if [[ "${to_delete_domain_idx}" == "${DNSIDX}" ]]; then
-            break_me=1 # also break out of the parent loop
+            domain_break_me=1 # also break out of the parent loop
             break
           fi
           if [[ $to_delete_domain_idx =~ ^[0-9]+$ ]]; then
@@ -237,7 +246,7 @@ while true; do
             continue
           fi
         done
-        if [[ "${break_me}" == "1" ]]; then # perform the break out of the parent loop
+        if [[ "${domain_break_me}" == "1" ]]; then # perform the break out of the parent loop
           break
         fi
         ;;
@@ -266,16 +275,15 @@ while true; do
 
   echo "DNS entries for [name_constraints]: ${domains[*]}"
   echo
-  declare looks_good
-  read -r -p "Does this look good? [y|n*]: " looks_good
-  if [[ "${looks_good}" == "" || "${looks_good}" =~ ^[Nn] ]]; then
+  read -r -p "Does this look good? [y|n*]: " domain_looks_good
+  if [[ "${domain_looks_good}" == "" || "${domain_looks_good}" =~ ^[Nn] ]]; then
     echo "Let's try that entire process again, shall we?"
     echo
-    domains=("${ROOT_DOMAIN}")
+    domains=()
     continue
   else
     echo
-    echo "Preparing to issue a new Certificate Authority for ${CA_NAME} with the domains:"
+    echo "Preparing to issue a new signed certificate with the domains:"
     for item in "${domains[@]}"; do
       echo "- ${item}"
     done
@@ -715,10 +723,10 @@ else
     echo ""
     echo "Choice  Bits  Performance  Security"
     echo "------  ----  -----------  --------"
-    echo "1       2048  Excellent    Fast"
-    echo "2       3072  Excellent    Good"
-    echo "3       4096  Very good    Good"
-    echo "4       8192  Good         Slow"
+    echo "1       2048  Excellent    Good"
+    echo "2       3072  Excellent    Very good"
+    echo "3       4096  Very good    Excellent"
+    echo "4       8192  Slow         Excellent"
     echo ""
     read -r -p "Which bit length shall be used? [1-4]: " ROOT_BIT_LENGTH
     echo
